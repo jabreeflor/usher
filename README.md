@@ -29,6 +29,13 @@ Change any of these from the menu bar under **Sizes**.
 - **Instant on repeat:** answers are cached per app and title, so switching back to a window doesn't call the LLM again.
 - **Works offline:** with no network or no API key, Usher guesses the category from the app.
 
+## It learns
+
+- **From your resizes.** If you resize a window Usher placed, Usher remembers the size you picked for that app and that kind of work. Resize Chrome on docs to two-thirds and Chrome on docs opens at two-thirds from then on, while Chrome on YouTube still goes full screen. See or forget these under **Learned Sizes**.
+- **From your rules.** Open the menu while an app is focused to set a rule for that app: **Always Full**, **Always Half**, and so on, or **Never Tile**. Apps with a rule skip the LLM entirely.
+
+Usher picks a share in this order: app rule, then learned size, then category default.
+
 ## Install
 
 Requires macOS 13 or later and Swift 5.10 or later.

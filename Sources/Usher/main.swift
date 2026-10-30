@@ -13,9 +13,22 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let classifier = Classifier()
     private let tiler = Tiler()
 
+    /// The last window Usher sized as the main window, and where it actually ended up.
+    private struct Placement {
+        let window: TrackedWindow
+        let bundleID: String
+        let appName: String
+        let category: Category
+        let share: Share
+        let area: CGRect
+        var frame: CGRect?
+    }
+
     private var recent: [TrackedWindow] = []
     private var lastCategory: [String: Category] = [:]
     private var lastAction = "Waiting for a window"
+    private var lastApp: (bundleID: String, name: String)?
+    private var placed: Placement?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if let button = statusItem.button {
@@ -52,15 +65,29 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
               let app = NSRunningApplication(processIdentifier: pid),
               let bundle = app.bundleIdentifier, !Self.ignoredBundles.contains(bundle) else { return }
 
+        let name = app.localizedName ?? bundle
+        lastApp = (bundle, name)
+        if !titleOnly { learnFromResize() }
+
+        let rule = Settings.shared.rule(for: bundle)
+        if rule == .ignore {
+            lastAction = "\(name): never tiled"
+            return
+        }
+
         let tracked = TrackedWindow(pid: pid, element: window)
         if !titleOnly {
             recent.removeAll { $0 == tracked }
             recent.insert(tracked, at: 0)
             recent = Array(recent.prefix(12))
         }
-        let name = app.localizedName ?? bundle
-        let title = AX.title(window)
 
+        if case .share(let share)? = rule {
+            if !titleOnly { place(tracked, bundleID: bundle, name: name, category: nil, share: share, why: "app rule") }
+            return
+        }
+
+        let title = AX.title(window)
         classifier.classify(appName: name, bundleID: bundle, title: title) { [weak self] result in
             guard let self else { return }
             // Jev can take a second; don't move a window the user already left.
@@ -70,14 +97,45 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
             if titleOnly, self.lastCategory[tracked.key] == result.category { return }
             self.lastCategory[tracked.key] = result.category
 
-            let share = Settings.shared.share(for: result.category)
-            self.tiler.tile(focused: tracked, share: share, recent: self.recent)
-            self.lastAction = "\(name): \(result.category.label) → \(share.label)"
             if result.source != .jev {
                 log("\(result.source.rawValue.padding(toLength: 4, withPad: " ", startingAt: 0)) \(bundle) \"\(title)\" -> \(result.category.rawValue)")
             }
-            log("tile \(name) at \(share.label.lowercased())")
+            if let learned = Settings.shared.learnedShare(bundleID: bundle, category: result.category) {
+                self.place(tracked, bundleID: bundle, name: name, category: result.category, share: learned, why: "learned")
+            } else {
+                self.place(tracked, bundleID: bundle, name: name, category: result.category,
+                           share: Settings.shared.share(for: result.category), why: nil)
+            }
         }
+    }
+
+    private func place(_ window: TrackedWindow, bundleID: String, name: String, category: Category?, share: Share, why: String?) {
+        guard let area = tiler.tile(focused: window, share: share, recent: recent) else { return }
+        let suffix = why.map { " (\($0))" } ?? ""
+        lastAction = "\(name): \(category?.label ?? "Rule") → \(share.label)\(suffix)"
+        log("tile \(name) at \(share.label.lowercased())\(suffix)")
+
+        // Only Jev's choices are worth correcting; an app rule is already the user's own.
+        guard let category else { placed = nil; return }
+        placed = Placement(window: window, bundleID: bundleID, appName: name, category: category, share: share, area: area)
+        // Read the frame back once the app has settled, since some apps won't shrink below their minimum size.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+            guard let self, self.placed?.window == window else { return }
+            self.placed?.frame = AX.frame(window.element)
+        }
+    }
+
+    /// If the user resized the last window Usher placed, remember the size they picked for that app and kind of work.
+    private func learnFromResize() {
+        guard let placement = placed, let before = placement.frame else { return }
+        placed = nil
+        guard AX.isTileable(placement.window.element), let now = AX.frame(placement.window.element) else { return }
+        // Small nudges aren't a verdict on the size.
+        guard abs(now.width - before.width) > placement.area.width * 0.08 else { return }
+        let share = Share.nearest(to: now.width / placement.area.width)
+        guard share != placement.share else { return }
+        Settings.shared.setLearnedShare(share, bundleID: placement.bundleID, category: placement.category)
+        log("learn \(placement.appName) \(placement.category.rawValue): \(placement.share.label) -> \(share.label)")
     }
 
     // MARK: Menu
@@ -115,6 +173,45 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         rules.submenu = rulesMenu
         menu.addItem(rules)
+
+        if let app = lastApp {
+            let current = Settings.shared.rule(for: app.bundleID)
+            let appItem = NSMenuItem(title: "\(app.name): \(current?.label ?? "Let Usher Decide")", action: nil, keyEquivalent: "")
+            let appMenu = NSMenu()
+            let choices: [AppRule?] = [nil] + Share.allCases.map(AppRule.share) + [.ignore]
+            for rule in choices {
+                if rule == .ignore || rule == .share(.full) { appMenu.addItem(.separator()) }
+                let choice = item(rule?.label ?? "Let Usher Decide", #selector(pickRule(_:)))
+                choice.representedObject = (app.bundleID, rule)
+                choice.state = rule == current ? .on : .off
+                appMenu.addItem(choice)
+            }
+            appItem.submenu = appMenu
+            menu.addItem(appItem)
+        }
+
+        let learned = Settings.shared.allLearned
+        let learnedItem = NSMenuItem(title: "Learned Sizes", action: nil, keyEquivalent: "")
+        let learnedMenu = NSMenu()
+        if learned.isEmpty {
+            let empty = NSMenuItem(title: "Resize a window Usher placed and it'll remember", action: nil, keyEquivalent: "")
+            empty.isEnabled = false
+            learnedMenu.addItem(empty)
+        } else {
+            let hint = NSMenuItem(title: "Click one to forget it", action: nil, keyEquivalent: "")
+            hint.isEnabled = false
+            learnedMenu.addItem(hint)
+            for entry in learned {
+                let row = item("\(Self.appName(entry.bundleID)) · \(entry.category.label): \(entry.share.label)", #selector(forgetOne(_:)))
+                row.representedObject = (entry.bundleID, entry.category)
+                learnedMenu.addItem(row)
+            }
+            learnedMenu.addItem(.separator())
+            learnedMenu.addItem(item("Forget All", #selector(forgetAllLearned)))
+        }
+        learnedItem.submenu = learnedMenu
+        menu.addItem(learnedItem)
+
         menu.addItem(item("Forget Saved Classifications", #selector(clearCache)))
         menu.addItem(.separator())
         menu.addItem(item("Quit Usher", #selector(quit), key: "q"))
@@ -128,7 +225,35 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func toggleEnabled() { Settings.shared.enabled.toggle() }
 
+    private static func appName(_ bundleID: String) -> String {
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else { return bundleID }
+        return FileManager.default.displayName(atPath: url.path).replacingOccurrences(of: ".app", with: "")
+    }
+
+    @objc private func pickRule(_ sender: NSMenuItem) {
+        guard let (bundleID, rule) = sender.representedObject as? (String, AppRule?) else { return }
+        Settings.shared.setRule(rule, for: bundleID)
+        if rule == .ignore {
+            recent.removeAll { NSRunningApplication(processIdentifier: $0.pid)?.bundleIdentifier == bundleID }
+            return
+        }
+        retile()
+    }
+
+    @objc private func forgetOne(_ sender: NSMenuItem) {
+        guard let (bundleID, category) = sender.representedObject as? (String, Category) else { return }
+        Settings.shared.setLearnedShare(nil, bundleID: bundleID, category: category)
+        retile()
+    }
+
+    @objc private func forgetAllLearned() {
+        Settings.shared.forgetLearned()
+        retile()
+    }
+
     @objc private func retile() {
+        // A manual re-tile resets the size on purpose; don't mistake that for a correction.
+        placed = nil
         lastCategory.removeAll()
         // Give the menu time to close so focus returns to the window underneath.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { self.watcher.refire() }

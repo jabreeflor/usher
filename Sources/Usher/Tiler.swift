@@ -4,8 +4,10 @@ import AppKit
 final class Tiler {
     var gap: CGFloat = 8
 
-    func tile(focused: TrackedWindow, share: Share, recent: [TrackedWindow]) {
-        guard let current = AX.frame(focused.element), let screen = Screens.containing(current) else { return }
+    /// Returns the area it tiled into, or nil if the window couldn't be read.
+    @discardableResult
+    func tile(focused: TrackedWindow, share: Share, recent: [TrackedWindow]) -> CGRect? {
+        guard let current = AX.frame(focused.element), let screen = Screens.containing(current) else { return nil }
         let area = Screens.visibleFrame(screen).insetBy(dx: gap, dy: gap)
 
         // Only windows already on this screen, so nothing jumps between monitors.
@@ -19,5 +21,6 @@ final class Tiler {
         for (window, rect) in zip(others, plan.side) {
             AX.setFrame(window.element, pid: window.pid, rect)
         }
+        return area
     }
 }
