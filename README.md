@@ -1,65 +1,85 @@
 # Usher
 
-A macOS menu bar app that gives the window you're working in the right amount of screen, automatically.
+**Usher gives the window you're working in the right amount of screen, automatically.**
 
-When focus changes, Usher asks an LLM (Jev, via [OpenRouter](https://openrouter.ai)) what kind of work the window is, then sizes it to match and arranges your other windows around it:
+Usher is a macOS menu bar app. When you switch windows, it works out what kind of work the window is for, then resizes it and arranges your other windows around it.
 
-| Category | Examples | Default share |
+---
+
+## How it works
+
+1. You focus a window.
+2. Usher sends the app's name and the window title to an LLM ([Jev](https://openrouter.ai/typesafe/jev-router) on OpenRouter), which sorts the window into a category.
+3. The window gets that category's share of the screen. Your other windows fill the rest.
+
+| Category | For | Share |
 |---|---|---|
-| Code | editors, IDEs, terminals | two-thirds |
-| Reference | docs, articles | half |
+| Code | editors, IDEs, terminals | ⅔ |
+| Reference | docs, articles | ½ |
 | Media | video, presentations | full |
-| Chat | messaging, email | one-third |
-| Writing | notes, documents | half |
-| Ambient | music, monitors, settings | one-third |
+| Writing | notes, documents | ½ |
+| Chat | messaging, email | ⅓ |
+| Ambient | music, monitors, settings | ⅓ |
 
-Shares can be changed from the menu bar under **Sizes**.
+Change any of these from the menu bar under **Sizes**.
 
-The other windows go into columns or a grid sized to stay usable, not thin strips. On an ultrawide display, a half or one-third window sits in the center with windows on both sides. If there isn't room for a usable side window (on a laptop screen, for example), Usher leaves it where it is.
+**Details**
+- **No thin strips:** side windows go into columns or a grid sized to stay usable.
+- **Ultrawide aware:** a window with a half or one-third share sits in the center, with other windows on both sides.
+- **Instant on repeat:** answers are cached per app and title, so switching back to a window doesn't call the LLM again.
+- **Works offline:** with no network or no API key, Usher guesses the category from the app.
 
-Answers are cached per app and window title, so switching back to a window is instant. If the request fails or there's no API key, Usher falls back to a built-in guess based on the app.
+## Install
+
+Requires macOS 13 or later and Swift 5.10 or later.
+
+```sh
+git clone https://github.com/jabreeflor/usher.git
+cd usher
+swift build
+```
 
 ## Setup
 
-Requires macOS 13 or later and Swift 5.10 or later (Xcode or the Command Line Tools).
-
-1. Add your OpenRouter API key, either as an environment variable:
-
-   ```sh
-   export OPENROUTER_API_KEY=sk-or-...
-   ```
-
-   or in a file:
-
-   ```sh
-   mkdir -p ~/.config/usher && chmod 700 ~/.config/usher
-   # paste the key into ~/.config/usher/openrouter_key
-   chmod 600 ~/.config/usher/openrouter_key
-   ```
-
-2. Build and run:
-
-   ```sh
-   swift build
-   .build/debug/Usher
-   ```
-
-3. Grant Accessibility permission when prompted: **System Settings > Privacy & Security > Accessibility**, then turn on the app that launched Usher (your terminal). Usher waits and starts tiling as soon as permission is granted.
-
-## Testing without moving windows
+**1. Add an [OpenRouter](https://openrouter.ai/keys) API key.** Set an environment variable:
 
 ```sh
-# Ask Jev to classify a window
+export OPENROUTER_API_KEY=sk-or-...
+```
+
+Or save the key to a file:
+
+```sh
+mkdir -p ~/.config/usher && chmod 700 ~/.config/usher
+pbpaste > ~/.config/usher/openrouter_key   # copy the key first
+chmod 600 ~/.config/usher/openrouter_key
+```
+
+**2. Run Usher.**
+
+```sh
+.build/debug/Usher
+```
+
+**3. Grant Accessibility permission.** Open **System Settings → Privacy & Security → Accessibility** and turn on the app that launched Usher, which is usually your terminal. Usher starts tiling as soon as it has access.
+
+## Try it without moving windows
+
+```sh
+# Classify a window
 .build/debug/Usher --classify com.google.Chrome "YouTube - Some video"
 
-# Print the layout for a screen size, share and number of side windows
+# Preview a layout: width, height, share, number of side windows
 .build/debug/Usher --plan 3440 1440 half 3
 ```
 
-## Options
+## Configuration
 
-- `USHER_EFFORT=default` lets the router pick its own reasoning effort. By default Usher asks for low effort.
+| Variable | Default | What it does |
+|---|---|---|
+| `OPENROUTER_API_KEY` | none | API key. Overrides the key file. |
+| `USHER_EFFORT` | `low` | Reasoning effort sent to the model. Set it to `default` to let the router decide. |
 
 ## License
 
-MIT
+[MIT](LICENSE)
